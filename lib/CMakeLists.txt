@@ -5,6 +5,7 @@ set(AMDGCN_INSTRUMENTATION_PASSES
     AMDGCNNumCacheLines
     AMDGCNMemTrace
     AMDGCNSubmitAddressMessages
+    AMDGCNSubmitBBStart
     )
 
 set(InjectAMDGCNFunction_SOURCES
@@ -24,6 +25,9 @@ set(AMDGCNMemTrace_SOURCES
 
 set(AMDGCNSubmitAddressMessages_SOURCES
 	AMDGCNSubmitAddressMessages.cpp)
+
+  set(AMDGCNSubmitBBStart_SOURCES
+	AMDGCNSubmitBBStart.cpp)
 
 set(AMDGCN_INSTRUMENTATION_PLUGINS "")
 
