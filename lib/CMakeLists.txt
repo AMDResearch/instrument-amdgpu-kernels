@@ -6,6 +6,7 @@ set(AMDGCN_INSTRUMENTATION_PASSES
     AMDGCNMemTrace
     AMDGCNSubmitAddressMessages
     AMDGCNSubmitBBStart
+    AMDGCNSubmitBBInterval
     )
 
 set(InjectAMDGCNFunction_SOURCES
@@ -28,6 +29,9 @@ set(AMDGCNSubmitAddressMessages_SOURCES
 
   set(AMDGCNSubmitBBStart_SOURCES
 	AMDGCNSubmitBBStart.cpp)
+
+  set(AMDGCNSubmitBBInterval_SOURCES
+	AMDGCNSubmitBBInterval.cpp)
 
 set(AMDGCN_INSTRUMENTATION_PLUGINS "")
 
