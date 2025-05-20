@@ -56,8 +56,6 @@ std::string getBitcodePath() {
     return "";
   }
 
-  errs() << "IR pass plugin path: " << PluginPath << "\n";
-
   std::string PluginDir = PluginPath.substr(0, LastSlash); // Extract directory
   if (PluginDir.empty()) {
     errs() << "Error: Could not determine plugin directory!\n";
@@ -76,7 +74,6 @@ std::string getBitcodePath() {
 }
 
 bool AMDGCNSubmitBBInterval::runOnModule(Module &M) {
-  errs() << "Running AMDGCNSubmitBBInterval on module: " << M.getName() << "\n";
   auto TargetTriple = M.getTargetTriple();
 
   // Use std::string comparison if needed, otherwise call str()
@@ -89,9 +86,9 @@ bool AMDGCNSubmitBBInterval::runOnModule(Module &M) {
   }(TargetTriple);
 
   if (TripleStr == "amdgcn-amd-amdhsa") {
-    errs() << "device function module found for " << TripleStr << "\n";
+    errs() << "Running AMDGCNSubmitBBInterval on " << TripleStr
+           << " device module for " << M.getName() << "\n";
   } else { // Not an AMDGPU target
-    errs() << TripleStr << ": Not an AMDGPU target, skipping pass.\n";
     return false;
   }
 
@@ -118,8 +115,6 @@ bool AMDGCNSubmitBBInterval::runOnModule(Module &M) {
   std::unique_ptr<llvm::Module> DeviceModule =
       std::move(DeviceModuleOrErr.get());
 
-  errs() << "Linking device module from " << BitcodePath
-         << " into GPU module\n";
   if (llvm::Linker::linkModules(M, std::move(DeviceModule))) {
     errs() << "Error linking device function module into instrumented "
               "module!\n";
@@ -127,8 +122,6 @@ bool AMDGCNSubmitBBInterval::runOnModule(Module &M) {
   }
 
   std::vector<Function *> GpuKernels;
-  // Declare a counter for all instrumented basic blocks
-  unsigned totalBbIndex = 0;
 
   for (auto &F : M) {
     if (F.isIntrinsic())
@@ -171,7 +164,6 @@ bool AMDGCNSubmitBBInterval::runOnModule(Module &M) {
     // Instrument each basic block in the cloned kernel NF:
     unsigned bbIndex = 0;
     for (auto BB = NF->begin(); BB != NF->end(); ++BB) {
-      // Replace deprecated getFirstNonPHI() usage:
       Instruction *firstInst = nullptr;
       if (!BB->empty()) {
         for (auto &Inst : *BB) {
@@ -254,7 +246,7 @@ bool AMDGCNSubmitBBInterval::runOnModule(Module &M) {
               .getCallee());
       // Cast the time interval allocation to a void Ptr
       Value *timeIntervalPtr =
-          BuilderEnd.CreateBitCast(timeIntervalAlloca, Ptr64Ty);
+          BuilderEnd.CreatePointerCast(timeIntervalAlloca, Ptr64Ty);
 
       // Insert call to s_submit_time_interval with debug info and the timing
       // struct
@@ -266,10 +258,10 @@ bool AMDGCNSubmitBBInterval::runOnModule(Module &M) {
       bbIndex++;
       ModifiedCodeGen = true;
     }
-    totalBbIndex += bbIndex;
+    errs() << "AMDGCNSubmitBBInterval: instrumented " << bbIndex
+           << " basic blocks for kernel " << I->getName() << "\n";
   }
-  errs() << "Done running AMDGCNSubmitBBInterval on module: " << M.getName()
-         << "\nInstrumented " << totalBbIndex << " basic blocks\n";
+  errs() << "Done running AMDGCNSubmitBBInterval on " << M.getName() << "\n";
   return ModifiedCodeGen;
 }
 
