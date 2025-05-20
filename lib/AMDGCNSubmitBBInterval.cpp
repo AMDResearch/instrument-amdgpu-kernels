@@ -1,26 +1,26 @@
 #include "AMDGCNSubmitBBInterval.h"
 #include "utils.h"
 
+#include "llvm/ADT/StringRef.h"
+#include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/Bitcode/BitcodeWriter.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/IntrinsicsAMDGPU.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Passes/PassPlugin.h"
-#include "llvm/Support/raw_ostream.h"
-#include "llvm/Transforms/Utils/Cloning.h"
-#include <iostream>
-#include <vector>
-
-#include "llvm/ADT/StringRef.h"
-#include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/raw_ostream.h"
+#include "llvm/Transforms/Utils/Cloning.h"
+
 #include <cstdlib>
 #include <dlfcn.h>
+#include <iostream>
 #include <limits.h>
 #include <type_traits>
 #include <unistd.h>
+#include <vector>
 
 using namespace llvm;
 using namespace std;
@@ -232,12 +232,12 @@ bool AMDGCNSubmitBBInterval::runOnModule(Module &M) {
       Value *dbgColumnVal = BuilderEnd.getInt32(columnConst);
 
       // Get (or insert) the declaration for s_submit_time_interval
-      auto Ptr64Ty = bufferPtr->getType();
+      Type *VoidPtrTy = PointerType::get(Type::getInt8Ty(M.getContext()), 0);
       Function *sSubmitTimeInterval = cast<Function>(
           M.getOrInsertFunction(
                "s_submit_time_interval",
                FunctionType::get(Type::getVoidTy(M.getContext()),
-                                 {bufferPtr->getType(), Ptr64Ty,
+                                 {bufferPtr->getType(), VoidPtrTy,
                                   Type::getInt64Ty(M.getContext()),
                                   Type::getInt32Ty(M.getContext()),
                                   Type::getInt32Ty(M.getContext()),
@@ -246,7 +246,7 @@ bool AMDGCNSubmitBBInterval::runOnModule(Module &M) {
               .getCallee());
       // Cast the time interval allocation to a void Ptr
       Value *timeIntervalPtr =
-          BuilderEnd.CreatePointerCast(timeIntervalAlloca, Ptr64Ty);
+          BuilderEnd.CreatePointerCast(timeIntervalAlloca, VoidPtrTy);
 
       // Insert call to s_submit_time_interval with debug info and the timing
       // struct
