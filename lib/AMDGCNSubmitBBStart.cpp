@@ -56,6 +56,8 @@ void InjectInstrumentationFunction(const BasicBlock::iterator &I,
   Value *DbgFileHashVal = Builder.getInt64(dbgFileHash);
   Value *DbgLineVal = Builder.getInt32(DL != nullptr ? DL->getLine() : 0);
   Value *DbgColumnVal = Builder.getInt32(DL != nullptr ? DL->getColumn() : 0);
+  Value *UserTypeVal = Builder.getInt32(0xffffffff);
+  Value *UserDataVal = Builder.getInt32(LocationCounter);
 
   std::string SourceInfo = (F.getName() + "     " + dbgFile + ":" +
                             Twine(DL != nullptr ? DL->getLine() : 0) + ":" +
@@ -63,15 +65,16 @@ void InjectInstrumentationFunction(const BasicBlock::iterator &I,
                                .str();
 
   auto &CTX = M.getContext();
-  FunctionType *FT =
-      FunctionType::get(Type::getVoidTy(CTX),
-                        {Ptr->getType(), Type::getInt64Ty(CTX),
-                         Type::getInt32Ty(CTX), Type::getInt32Ty(CTX)},
-                        false);
+  FunctionType *FT = FunctionType::get(
+      Type::getVoidTy(CTX),
+      {Ptr->getType(), Type::getInt64Ty(CTX), Type::getInt32Ty(CTX),
+       Type::getInt32Ty(CTX), Type::getInt32Ty(CTX), Type::getInt32Ty(CTX)},
+      false);
   FunctionCallee InstrumentationFunction =
       M.getOrInsertFunction("s_submit_wave_header", FT);
   Builder.CreateCall(FT, cast<Function>(InstrumentationFunction.getCallee()),
-                     {Ptr, DbgFileHashVal, DbgLineVal, DbgColumnVal});
+                     {Ptr, DbgFileHashVal, DbgLineVal, DbgColumnVal,
+                      UserTypeVal, UserDataVal});
   if (PrintLocationInfo) {
     errs() << "Injecting Basic Block tracker " << LocationCounter
            << " into AMDGPU Kernel: " << SourceInfo << "\n";
