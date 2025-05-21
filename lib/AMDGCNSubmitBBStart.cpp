@@ -211,6 +211,10 @@ bool AMDGCNSubmitBBStart::runOnModule(Module &M) {
     uint32_t LocationCounter = 0;
     for (Function::iterator BB = NF->begin(); BB != NF->end(); BB++) {
       auto I = BB->begin();
+      // Skip PHI nodes
+      while (I != BB->end() && isa<PHINode>(&*I)) {
+        ++I;
+      }
       if (I != BB->end()) {
         InjectInstrumentationFunction(I, *NF, M, LocationCounter, bufferPtr,
                                       true);
