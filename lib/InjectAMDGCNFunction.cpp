@@ -54,10 +54,6 @@ bool InjectAMDGCNFunc::runOnModule(Module &M) {
                                   {Type::getInt32Ty(CTX)}, &M),
                FunctionType::get(Type::getInt32Ty(CTX), false))
               .getCallee());
-
-#elif LLVM_VERSION_MAJOR == 19
-      Function *WorkItemXIDIntrinsicFunc = Intrinsic::getOrInsertDeclaration(
-          F.getParent(), Intrinsic::amdgcn_workitem_id_x);
 #else
       Function *WorkItemXIDIntrinsicFunc = Intrinsic::getDeclaration(
           F.getParent(), Intrinsic::amdgcn_workitem_id_x);

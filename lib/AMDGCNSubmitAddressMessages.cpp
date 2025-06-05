@@ -51,9 +51,9 @@ std::map<int, std::string> AddrSpaceMap = {
     {0, "FLAT"}, {1, "GLOBAL"}, {3, "SHARED"}, {4, "CONSTANT"}};
 
 std::string LoadOrStoreMap(const BasicBlock::iterator &I) {
-  if (LoadInst *LI = dyn_cast<LoadInst>(I))
+  if (dyn_cast<LoadInst>(I) != nullptr)
     return "LOAD";
-  else if (StoreInst *SI = dyn_cast<StoreInst>(I))
+  else if (dyn_cast<StoreInst>(I) != nullptr)
     return "STORE";
   else
     throw std::runtime_error("Error: unknown operation type");
@@ -278,11 +278,11 @@ bool AMDGCNSubmitAddressMessage::runOnModule(Module &M) {
     uint32_t LocationCounter = 0;
     for (Function::iterator BB = NF->begin(); BB != NF->end(); BB++) {
       for (BasicBlock::iterator I = BB->begin(); I != BB->end(); I++) {
-        if (LoadInst *LI = dyn_cast<LoadInst>(I)) {
+        if (dyn_cast<LoadInst>(I) != nullptr) {
           InjectInstrumentationFunction<LoadInst>(I, *NF, M, LocationCounter,
                                                   bufferPtr, true);
           ModifiedCodeGen = true;
-        } else if (StoreInst *SI = dyn_cast<StoreInst>(I)) {
+        } else if (dyn_cast<StoreInst>(I) != nullptr) {
           InjectInstrumentationFunction<StoreInst>(I, *NF, M, LocationCounter,
                                                    bufferPtr, true);
           ModifiedCodeGen = true;

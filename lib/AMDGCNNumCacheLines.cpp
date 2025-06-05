@@ -46,9 +46,9 @@ std::map<int, std::string> AddrSpaceMap = {
 std::map<std::string, uint32_t> LocationCounterSourceMap;
 
 std::string LoadOrStoreMap(const BasicBlock::iterator &I) {
-  if (LoadInst *LI = dyn_cast<LoadInst>(I))
+  if (dyn_cast<LoadInst>(I) != nullptr)
     return "LOAD";
-  else if (StoreInst *SI = dyn_cast<StoreInst>(I))
+  else if (dyn_cast<StoreInst>(I) != nullptr)
     return "STORE";
   else
     throw std::runtime_error("Error: unknown operation type");
@@ -125,11 +125,11 @@ bool AMDGCNMemTrace::runOnModule(Module &M) {
     if (F.getCallingConv() == CallingConv::AMDGPU_KERNEL) {
       for (Function::iterator BB = F.begin(); BB != F.end(); BB++) {
         for (BasicBlock::iterator I = BB->begin(); I != BB->end(); I++) {
-          if (LoadInst *LI = dyn_cast<LoadInst>(I)) {
+          if (dyn_cast<LoadInst>(I) != nullptr) {
             InjectingInstrumentationFunction<LoadInst>(I, F, M,
                                                        LocationCounter);
             ModifiedCodeGen = true;
-          } else if (StoreInst *SI = dyn_cast<StoreInst>(I)) {
+          } else if (dyn_cast<StoreInst>(I) != nullptr) {
             InjectingInstrumentationFunction<StoreInst>(I, F, M,
                                                         LocationCounter);
             ModifiedCodeGen = true;
