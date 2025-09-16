@@ -46,6 +46,70 @@ THE SOFTWARE.
 
 using namespace llvm;
 using namespace std;
+std::string getBitcodePath(const llvm::Module &M) {
+  Dl_info dl_info;
+  if (dladdr(reinterpret_cast<void *>(&getBitcodePath), &dl_info) == 0) {
+    llvm::errs() << "Error: Could not determine IR pass plugin path!\n";
+    return "";
+  }
+
+  std::string PluginPath = dl_info.dli_fname;
+  size_t LastSlash = PluginPath.find_last_of('/');
+  if (LastSlash == std::string::npos) {
+    llvm::errs() << "Error: IR pass plugin path invalid!\n";
+    return "";
+  }
+
+  llvm::errs() << "IR pass plugin path: " << PluginPath << "\n";
+
+  std::string PluginDir = PluginPath.substr(0, LastSlash); // Extract directory
+  if (PluginDir.empty()) {
+    llvm::errs() << "Error: Could not determine plugin directory!\n";
+    return "";
+  }
+  if (PluginPath.find("/lib/") != std::string::npos) {
+    PluginDir = PluginDir.substr(0, PluginDir.find("/lib/"));
+  }
+
+  std::string CodeObjectVersion =
+      (PluginPath.find("triton") != std::string::npos) ? "_co4" : "_co5";
+
+  // Determine CDNAVersion based on architecture
+  std::string CDNAVersion;
+  // Try to get the target-cpu from the module flag
+  std::string arch;
+  if (auto *cpuMD =
+          llvm::cast_or_null<llvm::MDString>(M.getModuleFlag("target-cpu"))) {
+    arch = cpuMD->getString().str();
+  } else {
+    // Fallback: try to get from a kernel function attribute
+    for (const auto &F : M) {
+      if (F.hasFnAttribute("target-cpu")) {
+        arch = F.getFnAttribute("target-cpu").getValueAsString().str();
+        break;
+      }
+    }
+  }
+
+  if (arch != "") {
+    llvm::errs() << "Detected architecture: " << arch << "\n";
+  } else {
+    llvm::errs() << "Warning: Could not determine target architecture, "
+                    "defaulting to cdna2.\n";
+    arch = "unknown";
+  }
+
+  if (arch == "gfx940" || arch == "gfx941" || arch == "gfx942") {
+    CDNAVersion = "_cdna3";
+  } else {
+    CDNAVersion = "_cdna2";
+  }
+
+  std::string BitcodePath =
+      PluginDir + "/dh_comms_dev" + CDNAVersion + CodeObjectVersion + ".bc";
+
+  return BitcodePath;
+}
 
 std::map<int, std::string> AddrSpaceMap = {
     {0, "FLAT"}, {1, "GLOBAL"}, {3, "SHARED"}, {4, "CONSTANT"}};
@@ -148,39 +212,6 @@ void InjectInstrumentationFunction(const BasicBlock::iterator &I,
   LocationCounter++;
 }
 
-std::string getBitcodePath() {
-  Dl_info dl_info;
-  if (dladdr(reinterpret_cast<void *>(&getBitcodePath), &dl_info) == 0) {
-    errs() << "Error: Could not determine IR pass plugin path!\n";
-    return "";
-  }
-
-  std::string PluginPath = dl_info.dli_fname;
-  size_t LastSlash = PluginPath.find_last_of('/');
-  if (LastSlash == std::string::npos) {
-    errs() << "Error: IR pass plugin path invalid!\n";
-    return "";
-  }
-
-  errs() << "IR pass plugin path: " << PluginPath << "\n";
-
-  std::string PluginDir = PluginPath.substr(0, LastSlash); // Extract directory
-  if (PluginDir.empty()) {
-    errs() << "Error: Could not determine plugin directory!\n";
-    return "";
-  }
-  if (PluginPath.find("/lib/") != std::string::npos) {
-    PluginDir = PluginDir.substr(0, PluginDir.find("/lib/"));
-  }
-
-  std::string CodeObjectVersion =
-      (PluginPath.find("triton") != std::string::npos) ? "co4" : "co5";
-  std::string BitcodePath =
-      PluginDir + "/dh_comms_dev_" + CodeObjectVersion + ".bc";
-
-  return BitcodePath;
-}
-
 bool AMDGCNSubmitAddressMessage::runOnModule(Module &M) {
   errs() << "Running AMDGCNSubmitAddressMessage on module: " << M.getName()
          << "\n";
@@ -202,7 +233,7 @@ bool AMDGCNSubmitAddressMessage::runOnModule(Module &M) {
     return false;
   }
 
-  std::string BitcodePath = getBitcodePath();
+  std::string BitcodePath = getBitcodePath(M);
 
   if (!llvm::sys::fs::exists(BitcodePath)) {
     errs() << "Error: Bitcode file not found at " << BitcodePath << "\n";
