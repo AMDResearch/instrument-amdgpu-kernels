@@ -72,7 +72,7 @@ std::string getBitcodePath(const llvm::Module &M) {
   }
 
   std::string CodeObjectVersion =
-      (PluginPath.find("triton") != std::string::npos) ? "_co4" : "_co5";
+      (PluginPath.find("triton") != std::string::npos) ? "_co5" : "_co6";
 
   // Determine CDNAVersion based on architecture
   std::string CDNAVersion;
