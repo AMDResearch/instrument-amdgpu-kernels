@@ -25,13 +25,16 @@ set(AMDGCNMemTrace_SOURCES
 	AMDGCNMemTrace.cpp)
 
 set(AMDGCNSubmitAddressMessages_SOURCES
-	AMDGCNSubmitAddressMessages.cpp)
+	AMDGCNSubmitAddressMessages.cpp
+	InstrumentationCommon.cpp)
 
   set(AMDGCNSubmitBBStart_SOURCES
-	AMDGCNSubmitBBStart.cpp)
+	AMDGCNSubmitBBStart.cpp
+	InstrumentationCommon.cpp)
 
   set(AMDGCNSubmitBBInterval_SOURCES
-	AMDGCNSubmitBBInterval.cpp)
+	AMDGCNSubmitBBInterval.cpp
+	InstrumentationCommon.cpp)
 
 set(AMDGCN_INSTRUMENTATION_PLUGINS "")
 

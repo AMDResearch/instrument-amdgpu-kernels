@@ -21,6 +21,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 *******************************************************************************/
 #include "AMDGCNSubmitAddressMessage.h"
+#include "InstrumentationCommon.h"
 #include "utils.h"
 
 #include "llvm/Bitcode/BitcodeWriter.h"
@@ -46,70 +47,7 @@ THE SOFTWARE.
 
 using namespace llvm;
 using namespace std;
-std::string getBitcodePath(const llvm::Module &M) {
-  Dl_info dl_info;
-  if (dladdr(reinterpret_cast<void *>(&getBitcodePath), &dl_info) == 0) {
-    llvm::errs() << "Error: Could not determine IR pass plugin path!\n";
-    return "";
-  }
-
-  std::string PluginPath = dl_info.dli_fname;
-  size_t LastSlash = PluginPath.find_last_of('/');
-  if (LastSlash == std::string::npos) {
-    llvm::errs() << "Error: IR pass plugin path invalid!\n";
-    return "";
-  }
-
-  llvm::errs() << "IR pass plugin path: " << PluginPath << "\n";
-
-  std::string PluginDir = PluginPath.substr(0, LastSlash); // Extract directory
-  if (PluginDir.empty()) {
-    llvm::errs() << "Error: Could not determine plugin directory!\n";
-    return "";
-  }
-  if (PluginPath.find("/lib/") != std::string::npos) {
-    PluginDir = PluginDir.substr(0, PluginDir.find("/lib/"));
-  }
-
-  std::string CodeObjectVersion =
-      (PluginPath.find("triton") != std::string::npos) ? "_co5" : "_co6";
-
-  // Determine CDNAVersion based on architecture
-  std::string CDNAVersion;
-  // Try to get the target-cpu from the module flag
-  std::string arch;
-  if (auto *cpuMD =
-          llvm::cast_or_null<llvm::MDString>(M.getModuleFlag("target-cpu"))) {
-    arch = cpuMD->getString().str();
-  } else {
-    // Fallback: try to get from a kernel function attribute
-    for (const auto &F : M) {
-      if (F.hasFnAttribute("target-cpu")) {
-        arch = F.getFnAttribute("target-cpu").getValueAsString().str();
-        break;
-      }
-    }
-  }
-
-  if (arch != "") {
-    llvm::errs() << "Detected architecture: " << arch << "\n";
-  } else {
-    llvm::errs() << "Warning: Could not determine target architecture, "
-                    "defaulting to cdna2.\n";
-    arch = "unknown";
-  }
-
-  if (arch == "gfx940" || arch == "gfx941" || arch == "gfx942") {
-    CDNAVersion = "_cdna3";
-  } else {
-    CDNAVersion = "_cdna2";
-  }
-
-  std::string BitcodePath =
-      PluginDir + "/dh_comms_dev" + CDNAVersion + CodeObjectVersion + ".bc";
-
-  return BitcodePath;
-}
+using namespace instrumentation::common;
 
 std::map<int, std::string> AddrSpaceMap = {
     {0, "FLAT"}, {1, "GLOBAL"}, {3, "SHARED"}, {4, "CONSTANT"}};
@@ -121,23 +59,6 @@ std::string LoadOrStoreMap(const BasicBlock::iterator &I) {
     return "STORE";
   else
     throw std::runtime_error("Error: unknown operation type");
-}
-
-std::string getFullPath(const llvm::DILocation *DIL) {
-  if (!DIL)
-    return "";
-
-  const llvm::DIFile *File = DIL->getScope()->getFile();
-  if (!File)
-    return "";
-
-  std::string Directory = File->getDirectory().str();
-  std::string FileName = File->getFilename().str();
-
-  if (!Directory.empty())
-    return Directory + "/" + FileName; // Concatenate full path
-  else
-    return FileName; // No directory available, return just the file name
 }
 
 template <typename LoadOrStoreInst>
@@ -215,97 +136,26 @@ void InjectInstrumentationFunction(const BasicBlock::iterator &I,
 bool AMDGCNSubmitAddressMessage::runOnModule(Module &M) {
   errs() << "Running AMDGCNSubmitAddressMessage on module: " << M.getName()
          << "\n";
-  auto TargetTriple = M.getTargetTriple();
 
-  // Use std::string comparison if needed, otherwise call str()
-  std::string TripleStr = [](const auto &T) -> std::string {
-    if constexpr (std::is_same_v<std::decay_t<decltype(T)>, std::string>) {
-      return T; // Already a std::string
-    } else {
-      return T.str(); // Convert llvm::Triple to std::string
-    }
-  }(TargetTriple);
-
-  if (TripleStr == "amdgcn-amd-amdhsa") {
-    errs() << "device function module found for " << TripleStr << "\n";
-  } else { // Not an AMDGPU target
-    errs() << TripleStr << ": Not an AMDGPU target, skipping pass.\n";
+  if (!validateAMDGPUTarget(M)) {
     return false;
   }
 
-  std::string BitcodePath = getBitcodePath(M);
-
-  if (!llvm::sys::fs::exists(BitcodePath)) {
-    errs() << "Error: Bitcode file not found at " << BitcodePath << "\n";
-    return false;
-  }
-
-  auto Buffer = MemoryBuffer::getFile(BitcodePath);
-  if (!Buffer) {
-    errs() << "Error loading bitcode file: " << BitcodePath << "\n";
-    return false;
-  }
-
-  auto DeviceModuleOrErr =
-      parseBitcodeFile(Buffer->get()->getMemBufferRef(), M.getContext());
-  if (!DeviceModuleOrErr) {
-    errs() << "Error parsing bitcode file: " << BitcodePath << "\n";
-    return false;
-  }
-
-  std::unique_ptr<llvm::Module> DeviceModule =
-      std::move(DeviceModuleOrErr.get());
-
-  errs() << "Linking device module from " << BitcodePath
-         << " into GPU module\n";
-  if (llvm::Linker::linkModules(M, std::move(DeviceModule))) {
-    errs() << "Error linking device function module into instrumented "
-              "module!\n";
+  if (!loadAndLinkBitcode(M)) {
     return false;
   }
 
   // Now v_submit_address should be available inside M
 
-  std::vector<Function *> GpuKernels;
-
-  for (auto &F : M) {
-    if (F.isIntrinsic())
-      continue;
-    if (F.getCallingConv() == CallingConv::AMDGPU_KERNEL) {
-      GpuKernels.push_back(&F);
-    }
-  }
+  std::vector<Function *> GpuKernels = collectGPUKernels(M);
 
   bool ModifiedCodeGen = false;
   for (auto &I : GpuKernels) {
-    std::string AugmentedName = "__amd_crk_" + I->getName().str() + "Pv";
     ValueToValueMapTy VMap;
-    // Add an extra ptr arg on to the instrumented kernels
-    std::vector<Type *> ArgTypes;
-    for (auto arg = I->arg_begin(); arg != I->arg_end(); ++arg) {
-      ArgTypes.push_back(arg->getType());
-    }
-    ArgTypes.push_back(PointerType::get(M.getContext(), /*AddrSpace=*/0));
-    FunctionType *FTy =
-        FunctionType::get(I->getFunctionType()->getReturnType(), ArgTypes,
-                          I->getFunctionType()->isVarArg());
-    Function *NF = Function::Create(FTy, I->getLinkage(), I->getAddressSpace(),
-                                    AugmentedName, &M);
-    NF->copyAttributesFrom(I);
-    VMap[I] = NF;
+    Function *NF = cloneKernelWithExtraArg(I, M, VMap);
 
     // Get the ptr we just added to the kernel arguments
     Value *bufferPtr = &*NF->arg_end() - 1;
-    Function *F = cast<Function>(VMap[I]);
-
-    Function::arg_iterator DestI = F->arg_begin();
-    for (const Argument &J : I->args()) {
-      DestI->setName(J.getName());
-      VMap[&J] = &*DestI++;
-    }
-    SmallVector<ReturnInst *, 8> Returns; // Ignore returns cloned.
-    CloneFunctionInto(F, I, VMap, CloneFunctionChangeType::GlobalChanges,
-                      Returns);
     uint32_t LocationCounter = 0;
     for (Function::iterator BB = NF->begin(); BB != NF->end(); BB++) {
       for (BasicBlock::iterator I = BB->begin(); I != BB->end(); I++) {
