@@ -61,6 +61,130 @@ std::string LoadOrStoreMap(const BasicBlock::iterator &I) {
     throw std::runtime_error("Error: unknown operation type");
 }
 
+// Helper functions to detect AMDGPU buffer intrinsics
+bool isAMDGCNBufferLoad(const CallInst *CI) {
+  if (!CI)
+    return false;
+  Function *Callee = CI->getCalledFunction();
+  if (!Callee)
+    return false;
+  StringRef Name = Callee->getName();
+  return Name.starts_with("llvm.amdgcn.raw.ptr.buffer.load") ||
+         Name.starts_with("llvm.amdgcn.struct.ptr.buffer.load");
+}
+
+bool isAMDGCNBufferStore(const CallInst *CI) {
+  if (!CI)
+    return false;
+  Function *Callee = CI->getCalledFunction();
+  if (!Callee)
+    return false;
+  StringRef Name = Callee->getName();
+  return Name.starts_with("llvm.amdgcn.raw.ptr.buffer.store") ||
+         Name.starts_with("llvm.amdgcn.struct.ptr.buffer.store");
+}
+
+// Instrumentation function for buffer intrinsics
+void InjectBufferInstrumentationFunction(const BasicBlock::iterator &I,
+                                         const Function &F, llvm::Module &M,
+                                         uint32_t &LocationCounter,
+                                         llvm::Value *Ptr, bool IsLoad,
+                                         bool PrintLocationInfo) {
+  auto &CTX = M.getContext();
+  auto CI = dyn_cast<CallInst>(I);
+  if (!CI)
+    return;
+
+  IRBuilder<> Builder(CI);
+
+  // For buffer intrinsics:
+  // - Load:  buffer_load(buffer_desc, offset, ...)
+  // - Store: buffer_store(data, buffer_desc, offset, ...)
+  // So buffer descriptor is at index 0 for loads, index 1 for stores
+  Value *BufferDesc = IsLoad ? CI->getArgOperand(0) : CI->getArgOperand(1);
+  Value *Offset = IsLoad ? CI->getArgOperand(1) : CI->getArgOperand(2);
+
+  // Get the original pointer from llvm.amdgcn.make.buffer.rsrc
+  // We need to trace back to find the original pointer
+  Value *OrigPtr = nullptr;
+  if (auto *MakeBufferCall = dyn_cast<CallInst>(BufferDesc)) {
+    if (MakeBufferCall->getCalledFunction() &&
+        MakeBufferCall->getCalledFunction()->getName().starts_with(
+            "llvm.amdgcn.make.buffer.rsrc")) {
+      OrigPtr =
+          MakeBufferCall->getArgOperand(0); // First arg is the original pointer
+    }
+  }
+
+  if (!OrigPtr) {
+    // Fallback if we can't trace the original pointer - use null pointer
+    OrigPtr = ConstantPointerNull::get(PointerType::get(CTX, 1));
+  }
+
+  // Calculate the actual address by adding the byte offset to the base pointer
+  // Convert pointer to i64, add offset, then we'll use the integer
+  // representation
+  Value *PtrAsInt = Builder.CreatePtrToInt(OrigPtr, Builder.getInt64Ty());
+  Value *OffsetExt = Builder.CreateSExt(Offset, Builder.getInt64Ty());
+  Value *ActualAddrInt = Builder.CreateAdd(PtrAsInt, OffsetExt);
+
+  // Create a pointer in address space 0 (flat) for instrumentation
+  // We use IntToPtr with the flat address space since that's compatible with
+  // Ptr
+  Value *ActualAddr =
+      Builder.CreateIntToPtr(ActualAddrInt, PointerType::get(CTX, 0));
+
+  Value *AccessTypeVal = Builder.getInt8(IsLoad ? 0b01 : 0b10);
+
+  DILocation *DL = CI->getDebugLoc();
+  std::string dbgFile =
+      DL != nullptr ? getFullPath(DL) : "<unknown source file>";
+  size_t dbgFileHash = std::hash<std::string>{}(dbgFile);
+
+  Value *DbgFileHashVal = Builder.getInt64(dbgFileHash);
+  Value *DbgLineVal = Builder.getInt32(DL != nullptr ? DL->getLine() : 0);
+  Value *DbgColumnVal = Builder.getInt32(DL != nullptr ? DL->getColumn() : 0);
+
+  // Address space for buffer intrinsics is typically global (1)
+  Value *AddrSpaceVal = Builder.getInt8(1);
+
+  // Get size from the vector type (e.g., <4 x float> = 16 bytes)
+  Type *DataType = IsLoad ? CI->getType() : CI->getArgOperand(0)->getType();
+  uint16_t DataSize = M.getDataLayout().getTypeStoreSize(DataType);
+  Value *PointeeTypeSizeVal = Builder.getInt16(DataSize);
+
+  // Ensure Addr64 has exactly the same type as Ptr using bitcast if needed
+  Value *Addr64 = ActualAddr;
+  if (Addr64->getType() != Ptr->getType()) {
+    Addr64 = Builder.CreateBitCast(ActualAddr, Ptr->getType());
+  }
+
+  std::string SourceInfo = (F.getName() + "     " + dbgFile + ":" +
+                            Twine(DL != nullptr ? DL->getLine() : 0) + ":" +
+                            Twine(DL != nullptr ? DL->getColumn() : 0))
+                               .str();
+
+  FunctionType *FT = FunctionType::get(
+      Type::getVoidTy(CTX),
+      {Ptr->getType(), Ptr->getType(), Type::getInt64Ty(CTX),
+       Type::getInt32Ty(CTX), Type::getInt32Ty(CTX), Type::getInt8Ty(CTX),
+       Type::getInt8Ty(CTX), Type::getInt16Ty(CTX)},
+      false);
+  FunctionCallee InstrumentationFunction =
+      M.getOrInsertFunction("v_submit_address", FT);
+  Builder.CreateCall(FT, cast<Function>(InstrumentationFunction.getCallee()),
+                     {Ptr, Addr64, DbgFileHashVal, DbgLineVal, DbgColumnVal,
+                      AccessTypeVal, AddrSpaceVal, PointeeTypeSizeVal});
+
+  if (PrintLocationInfo) {
+    errs() << "Injecting Buffer Intrinsic Trace Into AMDGPU Kernel: "
+           << SourceInfo << "\n";
+    errs() << LocationCounter << "     " << SourceInfo << "     GLOBAL     "
+           << (IsLoad ? "LOAD" : "STORE") << "     (buffer intrinsic)\n";
+  }
+  LocationCounter++;
+}
+
 template <typename LoadOrStoreInst>
 void InjectInstrumentationFunction(const BasicBlock::iterator &I,
                                    const Function &F, llvm::Module &M,
@@ -151,6 +275,11 @@ bool AMDGCNSubmitAddressMessage::runOnModule(Module &M) {
 
   bool ModifiedCodeGen = false;
   for (auto &I : GpuKernels) {
+    //  // Print the original kernel IR before instrumentation
+    //  errs() << "\n=== Original Kernel: " << I->getName() << " ===\n";
+    //  I->print(errs());
+    //  errs() << "\n=== End Kernel IR ===\n\n";
+
     ValueToValueMapTy VMap;
     Function *NF = cloneKernelWithExtraArg(I, M, VMap);
 
@@ -167,6 +296,17 @@ bool AMDGCNSubmitAddressMessage::runOnModule(Module &M) {
           InjectInstrumentationFunction<StoreInst>(I, *NF, M, LocationCounter,
                                                    bufferPtr, true);
           ModifiedCodeGen = true;
+        } else if (auto CI = dyn_cast<CallInst>(I)) {
+          // Handle AMDGPU buffer intrinsics
+          if (isAMDGCNBufferLoad(CI)) {
+            InjectBufferInstrumentationFunction(I, *NF, M, LocationCounter,
+                                                bufferPtr, true, true);
+            ModifiedCodeGen = true;
+          } else if (isAMDGCNBufferStore(CI)) {
+            InjectBufferInstrumentationFunction(I, *NF, M, LocationCounter,
+                                                bufferPtr, false, true);
+            ModifiedCodeGen = true;
+          }
         }
       }
     }
