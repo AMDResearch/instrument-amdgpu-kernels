@@ -287,7 +287,7 @@ bool AMDGCNSubmitBBInterval::runOnModule(Module &M) {
       Value *dbgColumnVal = BuilderEnd.getInt32(columnConst);
 
       // Get (or insert) the declaration for s_submit_time_interval
-      Type *VoidPtrTy = PointerType::get(Type::getInt8Ty(M.getContext()), 0);
+      Type *VoidPtrTy = PointerType::get(M.getContext(), 0);
       Function *sSubmitTimeInterval = cast<Function>(
           M.getOrInsertFunction(
                "s_submit_time_interval",
@@ -336,7 +336,6 @@ PassPluginLibraryInfo getPassPluginInfo() {
 extern "C"
     //    __attribute__((visibility("default"))) PassPluginLibraryInfo extern
     //    "C"
-    LLVM_ATTRIBUTE_WEAK PassPluginLibraryInfo
-    llvmGetPassPluginInfo() {
+    LLVM_ATTRIBUTE_WEAK PassPluginLibraryInfo llvmGetPassPluginInfo() {
   return getPassPluginInfo();
 }

@@ -22,8 +22,9 @@ THE SOFTWARE.
 *******************************************************************************/
 #include "InjectAMDGCNInlineASM.h"
 
-#include "llvm/IR/InlineAsm.h"
 #include "llvm/Bitcode/BitcodeWriter.h"
+#include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/IntrinsicsAMDGPU.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/Passes/PassBuilder.h"
@@ -48,7 +49,7 @@ bool InjectAMDGCNInlineASM::runOnModule(Module &M) {
 
       FunctionType *FTy = FunctionType::get(Type::getInt32Ty(CTX), false);
       std::string AsmString = "v_mov_b32 $0 v0\n";
-      InlineAsm* InlineAsmFunc = InlineAsm::get(FTy, AsmString, "=v", false);      
+      InlineAsm *InlineAsmFunc = InlineAsm::get(FTy, AsmString, "=v", false);
 
       // Get an IR builder. Sets the insertion point to the top of the function
       IRBuilder<> Builder(&*F.getEntryBlock().getFirstInsertionPt());
@@ -68,7 +69,7 @@ bool InjectAMDGCNInlineASM::runOnModule(Module &M) {
 PassPluginLibraryInfo getPassPluginInfo() {
   const auto callback = [](PassBuilder &PB) {
     PB.registerPipelineEarlySimplificationEPCallback(
-        [&](ModulePassManager &MPM, auto&&... args) {
+        [&](ModulePassManager &MPM, auto &&...args) {
           MPM.addPass(InjectAMDGCNInlineASM());
           return true;
         });
