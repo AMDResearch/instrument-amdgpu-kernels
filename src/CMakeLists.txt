@@ -1,38 +1,19 @@
+# LLVM instrumentation pass plugins that use dh_comms bitcode
 set(AMDGCN_INSTRUMENTATION_PASSES
-	InjectAMDGCNFunction
-    InjectAMDGCNInlineASM
-    InjectAMDGCNSharedMemTtrace
-    AMDGCNNumCacheLines
-    AMDGCNMemTrace
     AMDGCNSubmitAddressMessages
     AMDGCNSubmitBBStart
     AMDGCNSubmitBBInterval
     )
 
-set(InjectAMDGCNFunction_SOURCES
-  InjectAMDGCNFunction.cpp)
-
-set(InjectAMDGCNInlineASM_SOURCES
-  InjectAMDGCNInlineASM.cpp)
-
-set(InjectAMDGCNSharedMemTtrace_SOURCES
-    InjectAMDGCNSharedMemTtrace.cpp)
-
-set(AMDGCNNumCacheLines_SOURCES
-    AMDGCNNumCacheLines.cpp)
-
-set(AMDGCNMemTrace_SOURCES
-	AMDGCNMemTrace.cpp)
-
 set(AMDGCNSubmitAddressMessages_SOURCES
 	AMDGCNSubmitAddressMessages.cpp
 	InstrumentationCommon.cpp)
 
-  set(AMDGCNSubmitBBStart_SOURCES
+set(AMDGCNSubmitBBStart_SOURCES
 	AMDGCNSubmitBBStart.cpp
 	InstrumentationCommon.cpp)
 
-  set(AMDGCNSubmitBBInterval_SOURCES
+set(AMDGCNSubmitBBInterval_SOURCES
 	AMDGCNSubmitBBInterval.cpp
 	InstrumentationCommon.cpp)
 

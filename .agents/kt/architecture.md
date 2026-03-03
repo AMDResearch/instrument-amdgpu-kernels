@@ -3,6 +3,12 @@
 ## Overview
 LLVM pass plugins for instrumenting AMDGPU kernels at the IR level. Creates instrumented clones of kernels that submit runtime data to dh_comms buffers.
 
+**Recent Changes** (2026-03-03):
+- Removed 5 unused plugins that don't use dh_comms infrastructure
+- Removed `examples/`, `instrumentation/`, and `tests/` directories
+- Renamed `lib/` to `src/` for clarity
+- Simplified to 3 core plugins: AddressMessages, BBStart, BBInterval
+
 ## System Diagram
 
 ```
@@ -47,21 +53,29 @@ LLVM pass plugins for instrumenting AMDGPU kernels at the IR level. Creates inst
 
 ## Plugins
 
-| Plugin | Source | Instruments | Message Type |
-|--------|--------|-------------|--------------|
-| AMDGCNSubmitAddressMessages | `lib/AMDGCNSubmitAddressMessages.cpp` | Load/Store | Address (64 per wave) |
-| AMDGCNMemTrace | `lib/AMDGCNMemTrace.cpp` | Load/Store | Full trace |
-| AMDGCNNumCacheLines | `lib/AMDGCNNumCacheLines.cpp` | Load/Store | Cache line count |
-| AMDGCNSubmitBBStart | `lib/AMDGCNSubmitBBStart.cpp` | Basic blocks | BB entry |
-| AMDGCNSubmitBBInterval | `lib/AMDGCNSubmitBBInterval.cpp` | Basic blocks | BB timing |
+All plugins use dh_comms device bitcode for message submission:
+
+| Plugin | Source | Instruments | dh_comms Calls |
+|--------|--------|-------------|----------------|
+| AMDGCNSubmitAddressMessages | `src/AMDGCNSubmitAddressMessages.cpp` | Load/Store | `v_submit_address()` |
+| AMDGCNSubmitBBStart | `src/AMDGCNSubmitBBStart.cpp` | Basic blocks | `s_submit_wave_header()` |
+| AMDGCNSubmitBBInterval | `src/AMDGCNSubmitBBInterval.cpp` | BB timing | `s_submit_time_interval()` |
+
+### Removed Plugins (2026-03-03)
+
+The following plugins were removed as they don't integrate with dh_comms:
+- `AMDGCNMemTrace` — used external instrumentation file instead of dh_comms
+- `AMDGCNNumCacheLines` — used external instrumentation kernel
+- `InjectAMDGCNFunction` — example/demo code for custom function injection
+- `InjectAMDGCNInlineASM` — example/demo code for inline assembly
+- `InjectAMDGCNSharedMemTtrace` — shared memory tracing (no dh_comms integration)
 
 ## Shared Infrastructure
 
 | File | Purpose |
 |------|---------|
-| `lib/InstrumentationCommon.cpp` | Kernel cloning, bitcode linking |
+| `src/InstrumentationCommon.cpp` | Kernel cloning, bitcode linking |
 | `include/InstrumentationCommon.h` | Common API |
-| `instrumentation/*.cpp` | Device-side instrumentation kernels (compiled to bitcode) |
 
 ## Key Functions
 
@@ -105,5 +119,25 @@ clang++ -fplugin=/path/to/libAMDGCNSubmitAddressMessages-rocm.so ...
 - Must match LLVM version used by compiler
 - Bitcode path resolution assumes standard installation layout
 
+## Directory Structure
+
+```
+instrument-amdgpu-kernels/
+├── src/               # Plugin source files (renamed from lib/)
+│   ├── AMDGCNSubmitAddressMessages.cpp
+│   ├── AMDGCNSubmitBBStart.cpp
+│   ├── AMDGCNSubmitBBInterval.cpp
+│   ├── InstrumentationCommon.cpp
+│   └── CMakeLists.txt
+├── include/           # Public headers
+│   ├── AMDGCNSubmitAddressMessage.h
+│   ├── AMDGCNSubmitBBStart.h
+│   ├── AMDGCNSubmitBBInterval.h
+│   ├── InstrumentationCommon.h
+│   └── utils.h
+└── CMakeLists.txt     # Root build file
+```
+
 ## Last Verified
-Date: 2026-03-02
+Commit: <pending commit>
+Date: 2026-03-03

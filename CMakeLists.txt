@@ -97,26 +97,9 @@ if (CMAKE_VERSION VERSION_GREATER_EQUAL "3.24.0")
 endif()
 
 
-# enable_testing()
-
-add_subdirectory(lib)
-
-option(BUILD_TESTING "Enable tests" OFF)
-if (${BUILD_TESTING})
-	include(FetchContent)
-	FetchContent_Declare(
-	  googletest
-	  # Specify the commit you depend on and update it regularly.
-	  URL https://github.com/google/googletest/archive/5376968f6948923e2411081fd9372e71a59d8e77.zip
-	)
-	FetchContent_MakeAvailable(googletest)
-
-	include(CTest)
-	enable_testing()
-
-	find_package(hip REQUIRED)
-	add_subdirectory(tests)
-endif()
+# Build LLVM instrumentation pass plugins
+# Produces: libAMDGCNSubmitAddressMessages, libAMDGCNSubmitBBStart, libAMDGCNSubmitBBInterval
+add_subdirectory(src)
 
 install(DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/lib/
   DESTINATION lib
