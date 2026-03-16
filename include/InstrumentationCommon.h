@@ -25,8 +25,10 @@ THE SOFTWARE.
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
+#include <cstdint>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace llvm {
@@ -61,6 +63,42 @@ std::vector<llvm::Function *> collectGPUKernels(llvm::Module &M);
 llvm::Function *cloneKernelWithExtraArg(llvm::Function *OrigKernel,
                                         llvm::Module &M,
                                         llvm::ValueToValueMapTy &VMap);
+
+// Represents a single scope entry: a file pattern with optional line ranges.
+struct ScopeEntry {
+  std::string file_pattern;
+  bool is_full_path; // true if file_pattern starts with '/'
+  std::vector<std::pair<uint32_t, uint32_t>> ranges; // half-open [start, end)
+};
+
+// Source-level scope filter for instrumentation.
+//
+// Reads INSTRUMENTATION_SCOPE and INSTRUMENTATION_SCOPE_FILE environment
+// variables to determine which source locations should be instrumented.
+// When no scope is set, all instructions are instrumented (default behavior).
+class InstrumentationScope {
+public:
+  // Reads env vars and parses scope definitions.
+  // On parse error, prints diagnostic to stderr and disables filtering.
+  InstrumentationScope();
+
+  // Returns true if scope filtering is active.
+  bool isActive() const { return active_; }
+
+  // Returns true if the given source location matches the scope.
+  // When scope is not active, always returns true.
+  bool matches(const std::string &file, uint32_t line) const;
+
+  // Returns the number of scope entries (for diagnostic messages).
+  size_t size() const { return entries_.size(); }
+
+private:
+  bool parseDefinitions(const std::string &input);
+  bool parseFile(const std::string &path);
+
+  std::vector<ScopeEntry> entries_;
+  bool active_ = false;
+};
 
 } // namespace common
 } // namespace instrumentation

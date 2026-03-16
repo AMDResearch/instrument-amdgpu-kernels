@@ -271,15 +271,16 @@ bool AMDGCNSubmitAddressMessage::runOnModule(Module &M) {
 
   // Now v_submit_address should be available inside M
 
+  InstrumentationScope scope;
+  if (scope.isActive()) {
+    errs() << "Instrumentation scope active: " << scope.size()
+           << " definition(s)\n";
+  }
+
   std::vector<Function *> GpuKernels = collectGPUKernels(M);
 
   bool ModifiedCodeGen = false;
   for (auto &I : GpuKernels) {
-    //  // Print the original kernel IR before instrumentation
-    //  errs() << "\n=== Original Kernel: " << I->getName() << " ===\n";
-    //  I->print(errs());
-    //  errs() << "\n=== End Kernel IR ===\n\n";
-
     ValueToValueMapTy VMap;
     Function *NF = cloneKernelWithExtraArg(I, M, VMap);
 
@@ -288,6 +289,13 @@ bool AMDGCNSubmitAddressMessage::runOnModule(Module &M) {
     uint32_t LocationCounter = 0;
     for (Function::iterator BB = NF->begin(); BB != NF->end(); BB++) {
       for (BasicBlock::iterator I = BB->begin(); I != BB->end(); I++) {
+        // Scope filtering: skip instructions outside the scope
+        if (scope.isActive()) {
+          DILocation *DL = dyn_cast<Instruction>(I)->getDebugLoc();
+          if (!DL || !scope.matches(getFullPath(DL), DL->getLine()))
+            continue;
+        }
+
         if (dyn_cast<LoadInst>(I) != nullptr) {
           InjectInstrumentationFunction<LoadInst>(I, *NF, M, LocationCounter,
                                                   bufferPtr, true);

@@ -34,6 +34,8 @@ THE SOFTWARE.
 #include "llvm/Transforms/Utils/Cloning.h"
 #include <cstdlib>
 #include <dlfcn.h>
+#include <fstream>
+#include <sstream>
 #include <type_traits>
 
 using namespace llvm;
@@ -229,6 +231,257 @@ llvm::Function *cloneKernelWithExtraArg(llvm::Function *OrigKernel,
                     Returns);
 
   return F;
+}
+
+// --- InstrumentationScope implementation ---
+
+// Helper: trim leading and trailing whitespace from a string.
+static std::string trimWhitespace(const std::string &s) {
+  size_t start = s.find_first_not_of(" \t\r\n");
+  if (start == std::string::npos)
+    return "";
+  size_t end = s.find_last_not_of(" \t\r\n");
+  return s.substr(start, end - start + 1);
+}
+
+bool InstrumentationScope::parseDefinitions(const std::string &input) {
+  // Split on ';' to get individual scope definitions.
+  std::istringstream stream(input);
+  std::string definition;
+
+  while (std::getline(stream, definition, ';')) {
+    definition = trimWhitespace(definition);
+    if (definition.empty())
+      continue;
+
+    ScopeEntry entry;
+
+    // Find where the file path ends and line specs begin.
+    // The file path is everything before the first ':' that starts a line spec.
+    // A line spec starts with a digit after ':'.
+    //
+    // Cases:
+    //   /path/to/file.cpp           → file only, no line specs
+    //   /path/to/file.cpp:42        → file + line spec
+    //   /path/to/file.cpp:42:50     → file + range
+    //   :42,50                      → no file, line specs only
+    //   file.cpp:42,50              → tail match + line specs
+    //
+    // Strategy: find first ':' followed by a digit. Everything before that ':'
+    // is the file path. Everything after is line spec text.
+
+    std::string file_part;
+    std::string line_part;
+
+    // Handle the ":N" case (starts with colon)
+    if (definition[0] == ':') {
+      file_part = "";
+      line_part = definition.substr(1);
+    } else {
+      // Scan for first ':' followed by a digit
+      size_t colon_pos = std::string::npos;
+      for (size_t i = 0; i < definition.size(); ++i) {
+        if (definition[i] == ':' && i + 1 < definition.size() &&
+            std::isdigit(static_cast<unsigned char>(definition[i + 1]))) {
+          colon_pos = i;
+          break;
+        }
+      }
+
+      if (colon_pos == std::string::npos) {
+        // No line specs — file path only
+        file_part = definition;
+        line_part = "";
+      } else {
+        file_part = definition.substr(0, colon_pos);
+        line_part = definition.substr(colon_pos + 1);
+      }
+    }
+
+    entry.file_pattern = file_part;
+    entry.is_full_path = !file_part.empty() && file_part[0] == '/';
+
+    // Parse line specs if present
+    if (!line_part.empty()) {
+      // Line specs are comma-separated. Each is either N or N:M.
+      std::istringstream line_stream(line_part);
+      std::string spec;
+
+      while (std::getline(line_stream, spec, ',')) {
+        spec = trimWhitespace(spec);
+        if (spec.empty())
+          continue;
+
+        // Check for range N:M
+        size_t range_colon = spec.find(':');
+        if (range_colon != std::string::npos) {
+          std::string start_str = spec.substr(0, range_colon);
+          std::string end_str = spec.substr(range_colon + 1);
+
+          // Validate: no more colons allowed
+          if (end_str.find(':') != std::string::npos) {
+            llvm::errs()
+                << "InstrumentationScope: syntax error in line spec '" << spec
+                << "' — too many colons. Disabling scope filtering.\n";
+            return false;
+          }
+
+          char *endptr = nullptr;
+          unsigned long start_val = std::strtoul(start_str.c_str(), &endptr, 10);
+          if (*endptr != '\0') {
+            llvm::errs()
+                << "InstrumentationScope: syntax error in line spec '" << spec
+                << "' — invalid start number. Disabling scope filtering.\n";
+            return false;
+          }
+
+          endptr = nullptr;
+          unsigned long end_val = std::strtoul(end_str.c_str(), &endptr, 10);
+          if (*endptr != '\0') {
+            llvm::errs()
+                << "InstrumentationScope: syntax error in line spec '" << spec
+                << "' — invalid end number. Disabling scope filtering.\n";
+            return false;
+          }
+
+          if (end_val <= start_val) {
+            llvm::errs()
+                << "InstrumentationScope: syntax error in line spec '" << spec
+                << "' — end (" << end_val << ") must be greater than start ("
+                << start_val << "). Disabling scope filtering.\n";
+            return false;
+          }
+
+          entry.ranges.emplace_back(static_cast<uint32_t>(start_val),
+                                    static_cast<uint32_t>(end_val));
+        } else {
+          // Single line number N → range [N, N+1)
+          char *endptr = nullptr;
+          unsigned long line_val = std::strtoul(spec.c_str(), &endptr, 10);
+          if (*endptr != '\0') {
+            llvm::errs()
+                << "InstrumentationScope: syntax error in line spec '" << spec
+                << "' — invalid line number. Disabling scope filtering.\n";
+            return false;
+          }
+
+          entry.ranges.emplace_back(static_cast<uint32_t>(line_val),
+                                    static_cast<uint32_t>(line_val + 1));
+        }
+      }
+    }
+
+    entries_.push_back(std::move(entry));
+  }
+
+  return true;
+}
+
+InstrumentationScope::InstrumentationScope() {
+  const char *scope_env = std::getenv("INSTRUMENTATION_SCOPE");
+  const char *scope_file_env = std::getenv("INSTRUMENTATION_SCOPE_FILE");
+
+  if (!scope_env && !scope_file_env) {
+    active_ = false;
+    return;
+  }
+
+  bool ok = true;
+
+  if (scope_env) {
+    std::string scope_str(scope_env);
+    if (!scope_str.empty()) {
+      ok = parseDefinitions(scope_str);
+    }
+  }
+
+  if (ok && scope_file_env) {
+    std::string scope_file_str(scope_file_env);
+    if (!scope_file_str.empty()) {
+      ok = parseFile(scope_file_str);
+    }
+  }
+
+  if (!ok) {
+    // Parse error — disable filtering (instrument everything)
+    entries_.clear();
+    active_ = false;
+    return;
+  }
+
+  active_ = !entries_.empty();
+
+  if (active_) {
+    llvm::errs() << "InstrumentationScope: " << entries_.size()
+                 << " scope definition(s) active\n";
+  }
+}
+
+bool InstrumentationScope::matches(const std::string &file,
+                                   uint32_t line) const {
+  if (!active_)
+    return true;
+
+  for (const auto &entry : entries_) {
+    // Check file match
+    bool file_matches = false;
+
+    if (entry.file_pattern.empty()) {
+      // Empty pattern matches any file
+      file_matches = true;
+    } else if (entry.is_full_path) {
+      // Full path: exact match
+      file_matches = (file == entry.file_pattern);
+    } else {
+      // Tail match: file must end with the pattern
+      if (file.size() >= entry.file_pattern.size()) {
+        file_matches =
+            (file.compare(file.size() - entry.file_pattern.size(),
+                          entry.file_pattern.size(), entry.file_pattern) == 0);
+      }
+    }
+
+    if (!file_matches)
+      continue;
+
+    // If no ranges specified, file match alone is sufficient
+    if (entry.ranges.empty())
+      return true;
+
+    // Check if line falls in any range
+    for (const auto &range : entry.ranges) {
+      if (line >= range.first && line < range.second)
+        return true;
+    }
+  }
+
+  return false;
+}
+
+bool InstrumentationScope::parseFile(const std::string &path) {
+  std::ifstream file(path);
+  if (!file.is_open()) {
+    llvm::errs() << "InstrumentationScope: cannot open scope file '" << path
+                 << "'. Disabling scope filtering.\n";
+    return false;
+  }
+
+  // Read non-comment, non-blank lines and join them with ';'.
+  std::string combined;
+  std::string line;
+  while (std::getline(file, line)) {
+    line = trimWhitespace(line);
+    if (line.empty() || line[0] == '#')
+      continue;
+    if (!combined.empty())
+      combined += ';';
+    combined += line;
+  }
+
+  if (combined.empty())
+    return true; // Empty file is valid (no definitions)
+
+  return parseDefinitions(combined);
 }
 
 } // namespace common
